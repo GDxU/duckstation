@@ -74,6 +74,7 @@ static constexpr const char* UNLOCK_SOUND_NAME = "sounds/achievements/unlock.wav
 static constexpr const char* LBSUBMIT_SOUND_NAME = "sounds/achievements/lbsubmit.wav";
 static constexpr const char* CACHE_SUBDIRECTORY_NAME = "achievement_images";
 constexpr const char* const RA_LOGO_ICON_NAME = "images/ra-icon.webp";
+constexpr const char* const RA_LOGO_SVG_ICON_NAME = "images/ra-icon.svg";
 
 static constexpr float LOGIN_NOTIFICATION_TIME = 5.0f;
 static constexpr float ACHIEVEMENT_SUMMARY_NOTIFICATION_TIME = 5.0f;
@@ -696,9 +697,10 @@ bool Achievements::Initialize()
 
   // Hardcore starts off. We enable it on first boot.
   rc_client_set_hardcore_enabled(s_state.client, false);
-  rc_client_set_encore_mode_enabled(s_state.client, g_settings.achievements_encore_mode);
   rc_client_set_unofficial_enabled(s_state.client, g_settings.achievements_unofficial_test_mode);
   rc_client_set_spectator_mode_enabled(s_state.client, g_settings.achievements_spectator_mode);
+  rc_client_set_encore_mode_enabled(s_state.client,
+                                    !g_settings.achievements_spectator_mode && g_settings.achievements_encore_mode);
 
   // We can't do an internal client login while using RAIntegration, since the two will conflict.
   if (!IsRAIntegrationInitializing())
@@ -882,10 +884,13 @@ void Achievements::UpdateSettings(const Settings& old_config)
 
 void Achievements::UpdateModeSettings(const Settings& old_config)
 {
-  if (g_settings.achievements_encore_mode != old_config.achievements_encore_mode)
-    rc_client_set_encore_mode_enabled(s_state.client, g_settings.achievements_encore_mode);
-  if (g_settings.achievements_spectator_mode != old_config.achievements_spectator_mode)
+  if (g_settings.achievements_encore_mode != old_config.achievements_encore_mode ||
+      g_settings.achievements_spectator_mode != old_config.achievements_spectator_mode)
+  {
+    rc_client_set_encore_mode_enabled(s_state.client,
+                                      !g_settings.achievements_spectator_mode && g_settings.achievements_encore_mode);
     rc_client_set_spectator_mode_enabled(s_state.client, g_settings.achievements_spectator_mode);
+  }
   if (g_settings.achievements_unofficial_test_mode != old_config.achievements_unofficial_test_mode)
     rc_client_set_unofficial_enabled(s_state.client, g_settings.achievements_unofficial_test_mode);
 }
@@ -983,14 +988,36 @@ void Achievements::ClientServerCall(const rc_api_request_t* request, rc_client_s
 
 rc_api_server_response_t Achievements::MakeRCAPIServerResponse(s32 status_code, const std::vector<u8>& data)
 {
-  return rc_api_server_response_t{
-    .body = data.empty() ? nullptr : reinterpret_cast<const char*>(data.data()),
-    .body_length = data.size(),
-    .http_status_code = (status_code <= 0) ? (status_code == HTTPDownloader::HTTP_STATUS_CANCELLED ?
-                                                RC_API_SERVER_RESPONSE_CLIENT_ERROR :
-                                                RC_API_SERVER_RESPONSE_RETRYABLE_CLIENT_ERROR) :
-                                             status_code,
-  };
+  if (status_code < 0)
+  {
+    // assume all errors are retryable, except when it's cancelled
+    const int rc_http_status_code = (status_code == HTTPDownloader::HTTP_STATUS_CANCELLED) ?
+                                      RC_API_SERVER_RESPONSE_CLIENT_ERROR :
+                                      RC_API_SERVER_RESPONSE_RETRYABLE_CLIENT_ERROR;
+
+    // rc_client assumes client provides the error message as replacement to the body when the request is cancelled
+    // see rc_json_parse_server_response() around RC_API_SERVER_RESPONSE_CLIENT_ERROR.
+    const char* error_message;
+    if (status_code == HTTPDownloader::HTTP_STATUS_CANCELLED)
+      error_message = "Request cancelled";
+    else if (status_code == HTTPDownloader::HTTP_STATUS_TIMEOUT)
+      error_message = "Request timed out";
+    else
+      error_message = "Request failed";
+    return rc_api_server_response_t{
+      .body = error_message,
+      .body_length = std::strlen(error_message),
+      .http_status_code = rc_http_status_code,
+    };
+  }
+  else
+  {
+    return rc_api_server_response_t{
+      .body = data.empty() ? nullptr : reinterpret_cast<const char*>(data.data()),
+      .body_length = data.size(),
+      .http_status_code = status_code,
+    };
+  }
 }
 
 void Achievements::WaitForHTTPRequestsWithYield(std::unique_lock<std::recursive_mutex>& lock)
@@ -1506,6 +1533,23 @@ void Achievements::DisplayAchievementSummary()
   // Technically not going through the resource API, but since we're passing this to something else, we can't.
   if (g_settings.achievements_sound_effects)
     SoundEffectManager::EnqueueSoundEffect(INFO_SOUND_NAME);
+
+  // Warn when spectator mode is enabled.
+  if (rc_client_get_spectator_mode_enabled(s_state.client))
+  {
+    Host::AddIconOSDMessage(
+      OSDMessageType::Warning, "SpectatorOrEncoreMode", RA_LOGO_SVG_ICON_NAME,
+      TRANSLATE_STR("Achievements", "Spectator mode enabled."),
+      TRANSLATE_STR("Achievements", "All achievements are locked, and unlocks will not be recorded in your account."));
+  }
+  else if (rc_client_get_encore_mode_enabled(s_state.client))
+  {
+    Host::AddIconOSDMessage(
+      OSDMessageType::Warning, "SpectatorOrEncoreMode", RA_LOGO_SVG_ICON_NAME,
+      TRANSLATE_STR("Achievements", "Encore mode enabled."),
+      TRANSLATE_STR("Achievements",
+                    "All achievements are locked, but unlocks will still be recorded in your account."));
+  }
 }
 
 void Achievements::DisplayHardcoreDeferredMessage()
@@ -1908,7 +1952,7 @@ void Achievements::HandleServerReconnectedEvent(const rc_client_event_t* event)
 {
   WARNING_LOG("Server reconnected.");
 
-  Host::AddIconOSDMessage(OSDMessageType::Warning, "AchievementsDisconnected", RA_LOGO_ICON_NAME,
+  Host::AddIconOSDMessage(OSDMessageType::Warning, "AchievementsDisconnected", RA_LOGO_SVG_ICON_NAME,
                           TRANSLATE_STR("Achievements", "Achievements Reconnected"),
                           TRANSLATE_STR("Achievements", "All pending unlock requests have completed."));
 }
@@ -1942,7 +1986,7 @@ void Achievements::OnHardcoreModeChanged(bool enabled, bool display_message, boo
 
   if (System::IsValid() && display_message)
   {
-    Host::AddIconOSDMessage(OSDMessageType::Info, "AchievementsHardcoreModeChanged", RA_LOGO_ICON_NAME,
+    Host::AddIconOSDMessage(OSDMessageType::Info, "AchievementsHardcoreModeChanged", RA_LOGO_SVG_ICON_NAME,
                             enabled ? TRANSLATE_STR("Achievements", "Hardcore mode enabled.") :
                                       TRANSLATE_STR("Achievements", "Hardcore mode disabled."),
                             enabled ? TRANSLATE_STR("Achievements", "Restrictions are now active.") :
@@ -3522,6 +3566,10 @@ void Achievements::LoadPinnedAchievements()
     indicator.achievement_id = id.value();
     indicator.badge_path = GetAchievementBadgePath(achievement, false);
     s_state.pinned_achievement_indicators.push_back(std::move(indicator));
+    std::sort(s_state.pinned_achievement_indicators.begin(), s_state.pinned_achievement_indicators.end(),
+              [](const PinnedAchievementIndicator& lhs, const PinnedAchievementIndicator& rhs) {
+                return (lhs.achievement_id < rhs.achievement_id);
+              });
   }
 
   DEV_LOG("Loaded {} pinned achievements for game {}", s_state.pinned_achievement_indicators.size(), s_state.game_id);
@@ -3568,21 +3616,22 @@ void Achievements::SavePinnedAchievements()
 
 bool Achievements::IsAchievementPinned(u32 achievement_id)
 {
-  return std::any_of(
-    s_state.pinned_achievement_indicators.begin(), s_state.pinned_achievement_indicators.end(),
-    [achievement_id](const PinnedAchievementIndicator& ind) { return ind.achievement_id == achievement_id; });
+  const auto it = std::lower_bound(
+    s_state.pinned_achievement_indicators.begin(), s_state.pinned_achievement_indicators.end(), achievement_id,
+    [](const PinnedAchievementIndicator& ind, u32 search) { return ind.achievement_id < search; });
+  return (it != s_state.pinned_achievement_indicators.end() && it->achievement_id == achievement_id);
 }
 
 void Achievements::SetAchievementPinned(u32 achievement_id, bool pinned)
 {
-  const auto it = std::find_if(
-    s_state.pinned_achievement_indicators.begin(), s_state.pinned_achievement_indicators.end(),
-    [achievement_id](const PinnedAchievementIndicator& ind) { return ind.achievement_id == achievement_id; });
-
-  if ((it != s_state.pinned_achievement_indicators.end()) == pinned)
+  const auto it = std::lower_bound(
+    s_state.pinned_achievement_indicators.begin(), s_state.pinned_achievement_indicators.end(), achievement_id,
+    [](const PinnedAchievementIndicator& ind, u32 search) { return ind.achievement_id < search; });
+  const bool is_pinned = (it != s_state.pinned_achievement_indicators.end() && it->achievement_id == achievement_id);
+  if (is_pinned == pinned)
     return;
 
-  if (it != s_state.pinned_achievement_indicators.end())
+  if (is_pinned)
   {
     DEV_LOG("Unpinning achievement {}", achievement_id);
     s_state.pinned_achievement_indicators.erase(it);
@@ -3600,7 +3649,7 @@ void Achievements::SetAchievementPinned(u32 achievement_id, bool pinned)
     PinnedAchievementIndicator indicator;
     indicator.achievement_id = achievement_id;
     indicator.badge_path = GetAchievementBadgePath(achievement, false);
-    s_state.pinned_achievement_indicators.push_back(std::move(indicator));
+    s_state.pinned_achievement_indicators.insert(it, std::move(indicator));
 
     // Hide progress indicator if it was set
     if (s_state.active_progress_indicator.has_value() &&

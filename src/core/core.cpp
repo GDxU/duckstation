@@ -251,7 +251,7 @@ bool Core::InitializeBaseSettingsLayer(std::string settings_path, Error* error)
     else
     {
       SetDefaultSettings(si, true, true, true);
-      if (!si.Save(error))
+      if (!si.Save(error, Settings::GetSectionSaveOrder()))
       {
         Error::AddPrefix(error, "Failed to save settings: ");
         return false;
@@ -277,10 +277,11 @@ bool Core::InitializeBaseSettingsLayer(std::string settings_path, Error* error)
 bool Core::SaveBaseSettingsLayer(Error* error)
 {
   INISettingsInterface& si = s_locals.base_settings_interface;
-  if (si.IsDirty() && !si.Save(error))
-    return false;
+  if (!si.IsDirty())
+    return true;
 
-  return true;
+  si.RemoveEmptySections();
+  return si.Save(error, Settings::GetSectionSaveOrder());
 }
 
 void Core::SetDefaultSettings(bool host, bool system, bool controller)

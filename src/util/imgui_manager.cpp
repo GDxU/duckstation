@@ -159,6 +159,7 @@ struct ALIGN_TO_CACHE_LINE State
 
   // we maintain a second copy of the stick state here so we can map it to the dpad
   std::array<s8, 2> left_stick_axis_state = {};
+  InputManager::GamepadButtonType gamepad_button_type = InputManager::GamepadButtonType::Unknown;
   bool swap_gamepad_face_buttons = false;
 
   std::unique_ptr<GPUPipeline> imgui_pipeline;
@@ -210,6 +211,7 @@ bool ImGuiManager::Initialize(Error* error)
 
   s_state.global_scale = std::max((main_swap_chain ? main_swap_chain->GetScale() : 1.0f) * GetGlobalPrescale(), 1.0f);
   s_state.scale_changed = false;
+  s_state.gamepad_button_type = InputManager::GetLastGamepadButtonType();
 
   s_state.imgui_context = ImGui::CreateContext();
 
@@ -528,7 +530,6 @@ void ImGuiManager::RenderDrawLists(u32 window_width, u32 window_height, WindowIn
         clip = g_gpu_device->FlipToLowerLeft(clip, post_rotated_height);
 
       g_gpu_device->SetScissor(clip);
-      g_gpu_device->SetTextureSampler(0, pcmd->GetTexID(), g_gpu_device->GetLinearSampler());
 
       if (pcmd->UserCallback) [[unlikely]]
       {
@@ -537,6 +538,7 @@ void ImGuiManager::RenderDrawLists(u32 window_width, u32 window_height, WindowIn
       }
       else
       {
+        g_gpu_device->SetTextureSampler(0, pcmd->GetTexID(), g_gpu_device->GetLinearSampler());
         g_gpu_device->DrawIndexed(pcmd->ElemCount, base_index + pcmd->IdxOffset, base_vertex + pcmd->VtxOffset);
       }
     }
@@ -1334,6 +1336,22 @@ bool ImGuiManager::AreGamepadFaceButtonsSwapped()
 void ImGuiManager::SetGamepadFaceButtonsSwapped(bool enabled)
 {
   s_state.swap_gamepad_face_buttons = enabled;
+}
+
+InputManager::GamepadButtonType ImGuiManager::GetGamepadButtonType()
+{
+  return s_state.gamepad_button_type;
+}
+
+void ImGuiManager::SetGamepadButtonType(InputManager::GamepadButtonType type)
+{
+  VideoThread::RunOnThread([type]() {
+    if (type == s_state.gamepad_button_type)
+      return;
+
+    s_state.gamepad_button_type = type;
+    FullscreenUI::UpdateWidgetsSettings();
+  });
 }
 
 bool ImGuiManager::WantsTextInput()

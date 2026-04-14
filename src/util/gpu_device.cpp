@@ -398,7 +398,7 @@ std::optional<GPUDevice::AdapterInfoList> GPUDevice::GetAdapterListForAPI(Render
 #ifdef ENABLE_OPENGL
     case RenderAPI::OpenGL:
     case RenderAPI::OpenGLES:
-      ret = OpenGLContext::GetAdapterList(window_type, error);
+      ret = AdapterInfoList();
       break;
 #endif
 

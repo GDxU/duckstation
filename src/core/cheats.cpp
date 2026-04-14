@@ -195,7 +195,9 @@ public:
   virtual void SetOptionValue(u32 value) = 0;
 
   virtual void Apply() const = 0;
-  virtual void ApplyOnDisable() const = 0;
+  virtual void ApplyOnDisable(RollbackLog* rollback_list) const = 0;
+
+  virtual bool HasRestorableOnDisableEffects() const = 0;
 
 protected:
   Metadata m_metadata;
@@ -977,7 +979,7 @@ void Cheats::ReloadCheats(bool reload_files, bool reload_enabled_list, bool verb
                           bool show_disabled_codes)
 {
   for (const CheatCode* code : s_locals.frame_end_codes)
-    code->ApplyOnDisable();
+    code->ApplyOnDisable(nullptr);
 
   // Reload files if cheats or patches are enabled, and they were not previously.
   const bool patches_are_enabled = AreAnyPatchesEnabled();
@@ -1170,6 +1172,46 @@ void Cheats::ApplyFrameEndCodes()
 {
   for (const CheatCode* code : s_locals.frame_end_codes)
     code->Apply();
+}
+
+Cheats::RollbackLog Cheats::ApplyOnDisableCodes()
+{
+  RollbackLog ret;
+  for (const CheatCode* code : s_locals.frame_end_codes)
+    code->ApplyOnDisable(&ret);
+  return ret;
+}
+
+void Cheats::ReapplyOnDisableCodes(const RollbackLog& rollback_list)
+{
+  for (const RollbackEntry& entry : rollback_list)
+  {
+    switch (entry.size)
+    {
+      case MemoryAccessSize::Byte:
+        CPU::SafeWriteMemoryByte(entry.address, Truncate8(entry.value));
+        break;
+
+      case MemoryAccessSize::HalfWord:
+        CPU::SafeWriteMemoryHalfWord(entry.address, Truncate16(entry.value));
+        break;
+
+      case MemoryAccessSize::Word:
+        CPU::SafeWriteMemoryWord(entry.address, Truncate32(entry.value));
+        break;
+
+        UnreachableCode();
+    }
+  }
+}
+
+void Cheats::ApplyAllOnDisableCodes()
+{
+  for (const CheatCode* code : s_locals.frame_end_codes)
+  {
+    if (code->HasRestorableOnDisableEffects())
+      code->Apply();
+  }
 }
 
 bool Cheats::EnumerateManualCodes(std::function<bool(const std::string& name)> callback)
@@ -2143,7 +2185,9 @@ public:
   void SetOptionValue(u32 value) override;
 
   void Apply() const override;
-  void ApplyOnDisable() const override;
+  void ApplyOnDisable(RollbackLog* rollback_list) const override;
+
+  bool HasRestorableOnDisableEffects() const override;
 
 private:
   enum class InstructionCode : u8
@@ -4358,7 +4402,7 @@ void Cheats::GamesharkCheatCode::Apply() const
   }
 }
 
-void Cheats::GamesharkCheatCode::ApplyOnDisable() const
+void Cheats::GamesharkCheatCode::ApplyOnDisable(RollbackLog* rollback_list) const
 {
   const u32 count = static_cast<u32>(instructions.size());
   u32 index = 0;
@@ -4442,7 +4486,12 @@ void Cheats::GamesharkCheatCode::ApplyOnDisable() const
         const u16 comparevalue = Truncate16(inst.value32 >> 16);
         const u16 newvalue = Truncate16(inst.value32 & 0xFFFFu);
         if (value == newvalue)
+        {
+          if (rollback_list)
+            rollback_list->emplace_back(MemoryAccessSize::HalfWord, inst.address, newvalue);
+
           DoMemoryWrite<u16>(inst.address, comparevalue);
+        }
 
         index++;
       }
@@ -4454,7 +4503,12 @@ void Cheats::GamesharkCheatCode::ApplyOnDisable() const
         const u8 comparevalue = Truncate8(inst.value16 >> 8);
         const u8 newvalue = Truncate8(inst.value16 & 0xFFu);
         if (value == newvalue)
+        {
+          if (rollback_list)
+            rollback_list->emplace_back(MemoryAccessSize::Byte, inst.address, newvalue);
+
           DoMemoryWrite<u8>(inst.address, comparevalue);
+        }
 
         index++;
       }
@@ -4480,6 +4534,20 @@ void Cheats::GamesharkCheatCode::SetOptionValue(u32 value)
     const u32 fixed_mask = ~(value_mask << bitpos_start);
     inst.second = (inst.second & fixed_mask) | ((value & value_mask) << bitpos_start);
   }
+}
+
+bool Cheats::GamesharkCheatCode::HasRestorableOnDisableEffects() const
+{
+  for (const Instruction& inst : instructions)
+  {
+    if (inst.code == InstructionCode::ExtConstantWriteIfMatchWithRestore16 ||
+        inst.code == InstructionCode::ExtConstantWriteIfMatchWithRestore8)
+    {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 std::unique_ptr<Cheats::CheatCode> Cheats::ParseCode(CheatCode::Metadata metadata, const std::string_view data,

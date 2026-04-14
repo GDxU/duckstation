@@ -126,6 +126,7 @@ static void CachePauseMenuAchievementInfo(const rc_client_achievement_t* achieve
 
 static void DrawAchievement(const rc_client_achievement_t* cheevo, const ImVec2& prefetch_range);
 static void OpenAchievementDetails(u32 achievement_id);
+static void SetAchievementPinned(u32 achievement_id, bool pinned);
 
 static void LeaderboardFetchNearbyCallback(int result, const char* error_message,
                                            rc_client_leaderboard_entry_list_t* list, rc_client_t* client,
@@ -172,6 +173,7 @@ struct AchievementsLocals
 
   rc_client_achievement_list_t* achievement_list = nullptr;
   std::bitset<NUM_RC_CLIENT_ACHIEVEMENT_BUCKETS> achievement_buckets_collapsed = {};
+  u32 scroll_to_achievement_id = 0;
 
   rc_client_leaderboard_list_t* leaderboard_list = nullptr;
   const rc_client_leaderboard_t* open_leaderboard = nullptr;
@@ -217,6 +219,7 @@ void FullscreenUI::ClearAchievementsState()
     rc_client_destroy_achievement_list(s_achievements_locals.achievement_list);
     s_achievements_locals.achievement_list = nullptr;
   }
+  s_achievements_locals.scroll_to_achievement_id = 0;
 
   s_achievements_locals.open_subset = nullptr;
   s_achievements_locals.subset_info_list.clear();
@@ -799,7 +802,7 @@ void FullscreenUI::DrawIndicators(NotificationLayout& layout)
     {
       const rc_client_achievement_t* achievement =
         rc_client_get_achievement_info(Achievements::GetClient(), indicator.achievement_id);
-      if (!achievement)
+      if (!achievement || achievement->measured_progress[0] == '\0')
         continue;
 
       const ImVec2 text_size =
@@ -808,50 +811,54 @@ void FullscreenUI::DrawIndicators(NotificationLayout& layout)
       box_height += ((box_height > 0.0f) ? pinned_vertical_spacing : 0.0f) + pinned_image_size;
     }
 
-    // Add image width
-    box_width += pinned_image_size + spacing;
-    const float box_padded_width = box_width + padding.x * 2.0f;
-    const float box_padded_height = box_height + padding.y * 2.0f;
-    ImVec2 box_min = layout.GetFixedPosition(box_padded_width, box_padded_height);
-    ImVec2 box_max = box_min + ImVec2(box_padded_width, box_padded_height);
-
-    // NOTE: Not blurred since they're persistent.
-    DrawRoundedGradientRect(dl, box_min, box_max,
-                            ImGui::GetColorU32(ModAlpha(left_background_color, pinned_bg_opacity)),
-                            ImGui::GetColorU32(ModAlpha(right_background_color, pinned_bg_opacity)), rounding);
-
-    box_min += padding;
-    box_max -= padding;
-
-    ImVec2 pos = box_min;
-    for (const Achievements::PinnedAchievementIndicator& indicator : pinned)
+    // If the measuring hasn't begun yet, we don't want to display nothing
+    if (box_height > 0.0f)
     {
-      const rc_client_achievement_t* achievement =
-        rc_client_get_achievement_info(Achievements::GetClient(), indicator.achievement_id);
-      if (!achievement)
-        continue;
+      // Add image width
+      box_width += pinned_image_size + spacing;
+      const float box_padded_width = box_width + padding.x * 2.0f;
+      const float box_padded_height = box_height + padding.y * 2.0f;
+      ImVec2 box_min = layout.GetFixedPosition(box_padded_width, box_padded_height);
+      ImVec2 box_max = box_min + ImVec2(box_padded_width, box_padded_height);
 
-      const std::string_view text(achievement->measured_progress);
-      const ImVec2 text_size =
-        UIStyle.Font->CalcTextSizeA(font_size, font_weight, FLT_MAX, 0.0f, IMSTR_START_END(text));
-      const float total_width = (pinned_image_size + spacing + text_size.x);
-      const float start_x = pos.x + ImFloor((box_width - total_width) * 0.5f);
+      // NOTE: Not blurred since they're persistent.
+      DrawRoundedGradientRect(dl, box_min, box_max,
+                              ImGui::GetColorU32(ModAlpha(left_background_color, pinned_bg_opacity)),
+                              ImGui::GetColorU32(ModAlpha(right_background_color, pinned_bg_opacity)), rounding);
 
-      GPUTexture* const badge = FullscreenUI::GetCachedTextureAsync(indicator.badge_path);
-      if (badge)
+      box_min += padding;
+      box_max -= padding;
+
+      ImVec2 pos = box_min;
+      for (const Achievements::PinnedAchievementIndicator& indicator : pinned)
       {
-        const ImVec2 badge_pos = ImVec2(start_x, pos.y);
-        dl->AddImage(badge, badge_pos, badge_pos + ImVec2(pinned_image_size, pinned_image_size), ImVec2(0.0f, 0.0f),
-                     ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+        const rc_client_achievement_t* achievement =
+          rc_client_get_achievement_info(Achievements::GetClient(), indicator.achievement_id);
+        if (!achievement || achievement->measured_progress[0] == '\0')
+          continue;
+
+        const std::string_view text(achievement->measured_progress);
+        const ImVec2 text_size =
+          UIStyle.Font->CalcTextSizeA(font_size, font_weight, FLT_MAX, 0.0f, IMSTR_START_END(text));
+        const float total_width = (pinned_image_size + spacing + text_size.x);
+        const float start_x = pos.x + ImFloor((box_width - total_width) * 0.5f);
+
+        GPUTexture* const badge = FullscreenUI::GetCachedTextureAsync(indicator.badge_path);
+        if (badge)
+        {
+          const ImVec2 badge_pos = ImVec2(start_x, pos.y);
+          dl->AddImage(badge, badge_pos, badge_pos + ImVec2(pinned_image_size, pinned_image_size), ImVec2(0.0f, 0.0f),
+                       ImVec2(1.0f, 1.0f), IM_COL32(255, 255, 255, 255));
+        }
+
+        const ImRect text_clip_rect(ImVec2(start_x + pinned_image_size + spacing, pos.y),
+                                    ImVec2(box_max.x, pos.y + pinned_image_size));
+        RenderShadowedTextClipped(dl, UIStyle.Font, font_size, font_weight, text_clip_rect.Min, text_clip_rect.Max,
+                                  ImGui::GetColorU32(UIStyle.ToastTextColor), text, &text_size, ImVec2(0.0f, 0.5f),
+                                  0.0f, &text_clip_rect);
+
+        pos.y += pinned_image_size + pinned_vertical_spacing;
       }
-
-      const ImRect text_clip_rect(ImVec2(start_x + pinned_image_size + spacing, pos.y),
-                                  ImVec2(box_max.x, pos.y + pinned_image_size));
-      RenderShadowedTextClipped(dl, UIStyle.Font, font_size, font_weight, text_clip_rect.Min, text_clip_rect.Max,
-                                ImGui::GetColorU32(UIStyle.ToastTextColor), text, &text_size, ImVec2(0.0f, 0.5f), 0.0f,
-                                &text_clip_rect);
-
-      pos.y += pinned_image_size + pinned_vertical_spacing;
     }
   }
 }
@@ -1490,10 +1497,9 @@ void FullscreenUI::OpenAchievementsWindow()
   if (!System::IsValid())
     return;
 
-  const auto lock = Achievements::GetLock();
-  if (!Achievements::IsActive() || !Achievements::HasAchievements())
+  if (const auto lock = Achievements::GetLock(); !Achievements::IsActive() || !Achievements::HasAchievements())
   {
-    Host::AddIconOSDMessage(OSDMessageType::Info, "AchievementsUnavailable", Achievements::RA_LOGO_ICON_NAME,
+    Host::AddIconOSDMessage(OSDMessageType::Info, "AchievementsUnavailable", Achievements::RA_LOGO_SVG_ICON_NAME,
                             TRANSLATE_STR("Achievements", "Achievements are not available."),
                             Achievements::IsActive() ?
                               TRANSLATE_STR("Achievements", "This game has no achievements.") :
@@ -1755,6 +1761,7 @@ void FullscreenUI::SwitchToAchievements()
 
   // reset collapsed buckets
   s_achievements_locals.achievement_buckets_collapsed.reset();
+  s_achievements_locals.scroll_to_achievement_id = 0;
 
   // sort unlocked achievements by unlock time
   for (size_t i = 0; i < s_achievements_locals.achievement_list->num_buckets; i++)
@@ -2058,14 +2065,16 @@ void FullscreenUI::DrawAchievementsWindow()
       SetFullscreenFooterText(
         std::array{std::make_pair(ICON_PF_XBOX_DPAD_LEFT_RIGHT, TRANSLATE_SV("Achievements", "Change Subset")),
                    std::make_pair(ICON_PF_XBOX_DPAD_UP_DOWN, TRANSLATE_SV("Achievements", "Change Selection")),
-                   std::make_pair(ICON_PF_BUTTON_A, TRANSLATE_SV("Achievements", "View Details / Pin")),
+                   std::make_pair(ICON_PF_BUTTON_X, TRANSLATE_SV("Achievements", "Pin Achievement")),
+                   std::make_pair(ICON_PF_BUTTON_A, TRANSLATE_SV("Achievements", "View Details")),
                    std::make_pair(ICON_PF_BUTTON_B, TRANSLATE_SV("Achievements", "Back"))});
     }
     else
     {
       SetFullscreenFooterText(
         std::array{std::make_pair(ICON_PF_XBOX_DPAD_UP_DOWN, TRANSLATE_SV("Achievements", "Change Selection")),
-                   std::make_pair(ICON_PF_BUTTON_A, TRANSLATE_SV("Achievements", "View Details / Pin")),
+                   std::make_pair(ICON_PF_BUTTON_X, TRANSLATE_SV("Achievements", "Pin Achievement")),
+                   std::make_pair(ICON_PF_BUTTON_A, TRANSLATE_SV("Achievements", "View Details")),
                    std::make_pair(ICON_PF_BUTTON_B, TRANSLATE_SV("Achievements", "Back"))});
     }
   }
@@ -2076,14 +2085,15 @@ void FullscreenUI::DrawAchievementsWindow()
       SetFullscreenFooterText(std::array{
         std::make_pair(ICON_PF_ARROW_LEFT ICON_PF_ARROW_RIGHT, TRANSLATE_SV("Achievements", "Change Subset")),
         std::make_pair(ICON_PF_ARROW_UP ICON_PF_ARROW_DOWN, TRANSLATE_SV("Achievements", "Change Selection")),
-        std::make_pair(ICON_PF_ENTER, TRANSLATE_SV("Achievements", "View Details / Pin")),
+        std::make_pair(ICON_PF_F4, TRANSLATE_SV("Achievements", "View Details")),
         std::make_pair(ICON_PF_ESC, TRANSLATE_SV("Achievements", "Back"))});
     }
     else
     {
       SetFullscreenFooterText(std::array{
         std::make_pair(ICON_PF_ARROW_UP ICON_PF_ARROW_DOWN, TRANSLATE_SV("Achievements", "Change Selection")),
-        std::make_pair(ICON_PF_ENTER, TRANSLATE_SV("Achievements", "View Details / Pin")),
+        std::make_pair(ICON_PF_F4, TRANSLATE_SV("Achievements", "Pin Achievement")),
+        std::make_pair(ICON_PF_ENTER, TRANSLATE_SV("Achievements", "View Details")),
         std::make_pair(ICON_PF_ESC, TRANSLATE_SV("Achievements", "Back"))});
     }
   }
@@ -2108,6 +2118,7 @@ void FullscreenUI::DrawAchievement(const rc_client_achievement_t* cheevo, const 
   const std::string_view description = cheevo->description ? std::string_view(cheevo->description) : std::string_view();
   const std::string_view measured_progress(cheevo->measured_progress);
   const bool is_unlocked = (cheevo->state == RC_CLIENT_ACHIEVEMENT_STATE_UNLOCKED);
+  const bool is_pinned = (!is_unlocked && Achievements::IsAchievementPinned(cheevo->id));
   const bool is_measured = (!is_unlocked && !measured_progress.empty());
 
   ImVec2 type_badge_padding;
@@ -2135,9 +2146,7 @@ void FullscreenUI::DrawAchievement(const rc_client_achievement_t* cheevo, const 
   }
 
   static constexpr const float& pin_font_size = UIStyle.MediumLargeFontSize;
-  const std::string_view pin_text = (is_measured && Achievements::IsAchievementPinned(cheevo->id)) ?
-                                      std::string_view(ICON_FA_THUMBTACK) :
-                                      std::string_view();
+  const std::string_view pin_text = is_pinned ? std::string_view(ICON_FA_THUMBTACK) : std::string_view();
   const ImVec2 pin_size = pin_text.empty() ?
                             ImVec2() :
                             UIStyle.Font->CalcTextSizeA(pin_font_size, 0.0f, FLT_MAX, 0.0f, IMSTR_START_END(pin_text));
@@ -2188,6 +2197,12 @@ void FullscreenUI::DrawAchievement(const rc_client_achievement_t* cheevo, const 
       GetCachedAchievementBadgePath(cheevo, !is_unlocked);
 
     return;
+  }
+
+  if (s_achievements_locals.scroll_to_achievement_id == cheevo->id)
+  {
+    s_achievements_locals.scroll_to_achievement_id = 0;
+    ImGui::ScrollToItem(ImGuiScrollFlags_KeepVisibleEdgeY);
   }
 
   ImDrawList* const dl = ImGui::GetWindowDrawList();
@@ -2315,26 +2330,23 @@ void FullscreenUI::DrawAchievement(const rc_client_achievement_t* cheevo, const 
   if (clicked)
   {
     // Open non-measured achievements directly.
-    if (is_measured)
+    if (is_measured || is_pinned)
     {
-      const bool pinned = Achievements::IsAchievementPinned(cheevo->id);
-
       ChoiceDialogOptions options;
       options.emplace_back(FSUI_ICONSTR(ICON_FA_LINK, "Open on RetroAchievements"), false);
-      options.emplace_back(pinned ? FSUI_ICONSTR(ICON_FA_THUMBTACK_SLASH, "Unpin from OSD") :
-                                    FSUI_ICONSTR(ICON_FA_THUMBTACK, "Pin to OSD"),
+      options.emplace_back(is_pinned ? FSUI_ICONSTR(ICON_FA_THUMBTACK_SLASH, "Unpin from OSD") :
+                                       FSUI_ICONSTR(ICON_FA_THUMBTACK, "Pin to OSD"),
                            false);
 
       OpenChoiceDialog(cheevo->title, false, std::move(options),
-                       [achievement_id = cheevo->id, pinned](s32 index, const std::string& title, bool checked) {
+                       [achievement_id = cheevo->id, is_pinned](s32 index, const std::string& title, bool checked) {
                          switch (index)
                          {
                            case 0: // Open on RetroAchievements
                              OpenAchievementDetails(achievement_id);
                              break;
                            case 1: // Pin/Unpin
-                             Achievements::SetAchievementPinned(achievement_id, !pinned);
-                             SortLockedAchievements();
+                             SetAchievementPinned(achievement_id, !is_pinned);
                              break;
                            default:
                              break;
@@ -2346,6 +2358,16 @@ void FullscreenUI::DrawAchievement(const rc_client_achievement_t* cheevo, const 
       OpenAchievementDetails(cheevo->id);
     }
   }
+  else if (hovered)
+  {
+    if (ImGui::IsKeyPressed(ImGuiKey_F4, false) || ImGui::IsKeyPressed(ImGuiKey_NavGamepadMenu, false))
+    {
+      if (is_measured)
+        SetAchievementPinned(cheevo->id, !Achievements::IsAchievementPinned(cheevo->id));
+      else
+        ShowToast(OSDMessageType::Error, {}, FSUI_STR("Only measured achievements can be pinned."));
+    }
+  }
 }
 
 void FullscreenUI::OpenAchievementDetails(u32 achievement_id)
@@ -2355,15 +2377,35 @@ void FullscreenUI::OpenAchievementDetails(u32 achievement_id)
   Host::OpenURL(url);
 }
 
+void FullscreenUI::SetAchievementPinned(u32 achievement_id, bool pinned)
+{
+  DebugAssert(VideoThread::IsOnThread());
+
+  BeginTransition(DEFAULT_TRANSITION_TIME, [achievement_id, pinned]() {
+    const rc_client_achievement_t* achievement =
+      rc_client_get_achievement_info(Achievements::GetClient(), achievement_id);
+    if (!achievement)
+      return;
+
+    ShowToast(
+      OSDMessageType::Info, {},
+      pinned ?
+        FSUI_ICONSTR(ICON_FA_THUMBTACK, SmallString::from_format(FSUI_FSTR("{} pinned."), achievement->title)) :
+        FSUI_ICONSTR(ICON_FA_THUMBTACK_SLASH, SmallString::from_format(FSUI_FSTR("{} unpinned."), achievement->title)));
+    Achievements::SetAchievementPinned(achievement_id, pinned);
+    SortLockedAchievements();
+    s_achievements_locals.scroll_to_achievement_id = achievement_id;
+  });
+}
+
 void FullscreenUI::OpenLeaderboardsWindow()
 {
   if (!System::IsValid())
     return;
 
-  const auto lock = Achievements::GetLock();
-  if (!Achievements::IsActive() || !Achievements::HasLeaderboards())
+  if (const auto lock = Achievements::GetLock(); !Achievements::IsActive() || !Achievements::HasLeaderboards())
   {
-    Host::AddIconOSDMessage(OSDMessageType::Info, "LeaderboardsUnavailable", Achievements::RA_LOGO_ICON_NAME,
+    Host::AddIconOSDMessage(OSDMessageType::Info, "LeaderboardsUnavailable", Achievements::RA_LOGO_SVG_ICON_NAME,
                             TRANSLATE_STR("Achievements", "Leaderboards are not available."),
                             Achievements::IsActive() ?
                               TRANSLATE_STR("Achievements", "This game has no leaderboards.") :

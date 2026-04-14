@@ -61,11 +61,11 @@ find_package(zstd 1.5.7 REQUIRED
              NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/zstd")
 find_package(WebP 1.6.0 REQUIRED
              NO_DEFAULT_PATH PATHS "${DEPS_PATH}/share/WebP/cmake")
-find_package(PNG 1.6.55 REQUIRED
+find_package(PNG 1.6.56 REQUIRED
              NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/PNG")
-find_package(libjpeg-turbo 3.1.3 REQUIRED
+find_package(libjpeg-turbo 3.1.4.1 REQUIRED
              NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/libjpeg-turbo")
-find_package(freetype 2.14.1 REQUIRED
+find_package(freetype 2.14.3 REQUIRED
              NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/freetype")
 find_package(harfbuzz REQUIRED
              NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/harfbuzz")
@@ -83,7 +83,7 @@ find_package(Shaderc 2026.1 REQUIRED
              NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/Shaderc")
 find_package(spirv_cross_c_shared REQUIRED
              NO_DEFAULT_PATH PATHS "${DEPS_PATH}/share/spirv_cross_c_shared/cmake")
-find_package(SDL3 3.4.2 REQUIRED
+find_package(SDL3 3.4.4 REQUIRED
              NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/SDL3")
 
 # Verify dependency paths.
@@ -95,25 +95,23 @@ foreach(dep zstd WebP PNG libjpeg-turbo freetype harfbuzz plutosvg cpuinfo
   endif()
 endforeach()
 
-if(BUILD_QT_FRONTEND)
-  # All our builds include Qt, so this is not a problem.
-  set(QT_NO_PRIVATE_MODULE_WARNING ON)
+# All our builds include Qt, so this is not a problem.
+set(QT_NO_PRIVATE_MODULE_WARNING ON)
 
-  # Should be prebuilt.
-  if(LINUX)
-    find_package(Qt6 6.10.2 REQUIRED
-                 NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/Qt6"
-                 COMPONENTS Core Gui GuiPrivate Widgets LinguistTools DBus)
-  else()
-    find_package(Qt6 6.10.2 REQUIRED
-                 NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/Qt6"
-                 COMPONENTS Core Gui GuiPrivate Widgets LinguistTools)
-  endif()
+# Should be prebuilt.
+if(LINUX)
+  find_package(Qt6 6.11.0 REQUIRED
+                NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/Qt6"
+                COMPONENTS Core Gui GuiPrivate Widgets LinguistTools DBus)
+else()
+  find_package(Qt6 6.11.0 REQUIRED
+                NO_DEFAULT_PATH PATHS "${DEPS_PATH}/lib/cmake/Qt6"
+                COMPONENTS Core Gui GuiPrivate Widgets LinguistTools)
+endif()
 
-  # Have to verify it down here, don't want users using unpatched Qt.
-  if(NOT Qt6_DIR MATCHES "^${DEPS_PATH}")
-    message(FATAL_ERROR "Using incorrect Qt library. Check your dependencies.")
-  endif()
+# Have to verify it down here, don't want users using unpatched Qt.
+if(NOT Qt6_DIR MATCHES "^${DEPS_PATH}")
+message(FATAL_ERROR "Using incorrect Qt library. Check your dependencies.")
 endif()
 
 # Libraries that are pulled in from host.
@@ -126,8 +124,8 @@ if(NOT WIN32)
   if(NOT APPLE)
     if(ENABLE_X11)
       find_package(X11 REQUIRED)
-      if (NOT X11_xcb_FOUND OR NOT X11_xcb_randr_FOUND OR NOT X11_X11_xcb_FOUND)
-        message(FATAL_ERROR "XCB, XCB-randr and X11-xcb are required")
+      if (NOT X11_xcb_FOUND)
+        message(FATAL_ERROR "XCB is required")
       endif()
     endif()
 
@@ -140,7 +138,7 @@ if(NOT WIN32)
 endif()
 
 if(NOT WIN32)
-  find_package(FFMPEG 8.0.1 COMPONENTS avcodec avformat avutil swresample swscale)
+  find_package(FFMPEG 8.1.0 COMPONENTS avcodec avformat avutil swresample swscale)
   if(NOT FFMPEG_FOUND)
     message(WARNING "FFmpeg not found, using bundled headers.")
   endif()

@@ -36,6 +36,7 @@ jobs:
         DEPS_VERSION=$(cat dep/PREBUILT-VERSION)
         cd dep/prebuilt
         curl --retry 5 --retry-all-errors -LO "https://github.com/duckstation/dependencies/releases/download/$DEPS_VERSION/deps-linux-x64.tar.xz"
+        sha256sum --check --ignore-missing ../PREBUILT-SHA256SUMS
         tar -xf "deps-linux-x64.tar.xz"
         rm "deps-linux-x64.tar.xz"
 
@@ -71,9 +72,9 @@ jobs:
         scripts/appimage/make-appimage.sh $(realpath .) $(realpath ./build) "${{ matrix.asset }}"
 
     - name: Upload AppImage
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: "${{ matrix.artifact }}"
         path: "${{ matrix.asset }}"
-        compression-level: 0
+        archive: false
         if-no-files-found: error
